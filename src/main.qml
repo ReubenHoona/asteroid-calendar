@@ -470,8 +470,17 @@ Application {
                     preferredHighlightEnd: width / 2 + dayLV.width / 5
                     highlightRangeMode: ListView.StrictlyEnforceRange
                     snapMode: ListView.SnapToItem
+                    // Until the list is laid out, StrictlyEnforceRange picks the
+                    // current item from the scroll position (the first days), and
+                    // writing that back would move the selected day off today.
+                    property bool ready: false
                     currentIndex: day - 1
-                    onCurrentIndexChanged: day = currentIndex + 1
+                    onCurrentIndexChanged: if (ready) day = currentIndex + 1
+                    Component.onCompleted: Qt.callLater(function() {
+                        dayLV.currentIndex = day - 1
+                        dayLV.positionViewAtIndex(day - 1, ListView.Center)
+                        dayLV.ready = true
+                    })
                     spacing: 1 / count
                 }
             }
