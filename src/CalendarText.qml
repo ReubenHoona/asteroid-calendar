@@ -52,6 +52,33 @@ QtObject {
     readonly property string remindersLabel: qsTrId("id-event-notifications")
     //% "Calendar"
     readonly property string calendarLabel: qsTrId("id-event-calendar")
+    //% "Going?"
+    readonly property string rsvpGoing: qsTrId("id-rsvp-going")
+    //% "Yes"
+    readonly property string rsvpYes: qsTrId("id-rsvp-yes")
+    //% "Maybe"
+    readonly property string rsvpMaybe: qsTrId("id-rsvp-maybe")
+    //% "No"
+    readonly property string rsvpNo: qsTrId("id-rsvp-no")
+    //% "Responded %1"
+    readonly property string rsvpResponded: qsTrId("id-rsvp-responded")
+    //% "Change RSVP"
+    readonly property string changeRsvp: qsTrId("id-rsvp-change")
+    //% "Response could not be updated."
+    readonly property string rsvpFailed: qsTrId("id-rsvp-failed")
+    //% "Open on phone"
+    readonly property string openOnPhone: qsTrId("id-open-on-phone")
+    //% "Opened on your phone"
+    readonly property string openedOnPhone: qsTrId("id-opened-on-phone")
+    //% "Could not open on your phone"
+    readonly property string openFailed: qsTrId("id-open-on-phone-failed")
+    //% "View more on phone"
+    readonly property string viewMoreOnPhone: qsTrId("id-view-more-on-phone")
+
+    // the chip text of an answer (1 Yes, 2 Maybe, 3 No)
+    function rsvpOption(st) {
+        return st === 1 ? rsvpYes : st === 2 ? rsvpMaybe : rsvpNo
+    }
 
     // 'Tue' + 10 -> 'Tue 10' (weekday_date_order)
     function weekdayDate(weekday, day) {

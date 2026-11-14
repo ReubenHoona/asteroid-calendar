@@ -9,6 +9,7 @@ asteroid_app_qml_module(asteroid-calendar
 	EventCard.qml
 	EventDetails.qml
 	DetailRow.qml
+	PhoneRelay.qml
 )
 
 target_link_libraries(

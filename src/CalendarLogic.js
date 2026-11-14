@@ -417,8 +417,9 @@ function canDelete(event, phoneCanDelete) {
     return event.calendarUid !== phoneNotebookUid || phoneCanDelete === true
 }
 
-/* The rows of the details screen in stock order (lmg.java:118-248) */
-function detailRows(event, extras, reminders, deletable) {
+/* The rows of the details screen in stock order (lmg.java:118-248).
+   phone: { rsvp, open } (booleans) adds the phone's two segments between the calendar name and 'Delete event' */
+function detailRows(event, extras, reminders, deletable, phone) {
     var rows = ["title", "when"]
     if (String(event.location || "").trim() !== "")
         rows.push("location")
@@ -427,7 +428,104 @@ function detailRows(event, extras, reminders, deletable) {
     if (reminders.length > 0)
         rows.push("reminders")
     rows.push("calendar")
+    if (phone && phone.rsvp)
+        rows.push("rsvp")
+    if (phone && phone.open)
+        rows.push("openPhone")
     if (deletable)
         rows.push("delete")
     return rows
+}
+
+/* ---- another app's request (CR-36): dconf /org/asteroidos/calendar/ui/open ---- */
+
+/* How old a request may be, and how far in the future (clock differences), in ms */
+var requestMaxAge = 60000
+var requestMaxFuture = 5000
+
+/*
+ * "event:<startMs>@<nowMs>" -> { route: "event", start: <startMs>, at: <nowMs> }, the part before the LAST "@" being the route.
+ * null for an empty value, a request older than 60 s or more than 5 s in the future, and a route this app does
+ * not know. now: Date.now().
+ */
+function parseOpenRequest(value, now) {
+    var text = String(value === undefined || value === null ? "" : value)
+    var at = text.lastIndexOf("@")
+    if (at < 0)
+        return null
+    var stamp = text.substring(at + 1)
+    if (!/^\d+$/.test(stamp))
+        return null
+    var age = now - Number(stamp)
+    if (!(age >= -requestMaxFuture && age <= requestMaxAge))
+        return null
+    var m = /^event:(\d+)$/.exec(text.substring(0, at))
+    if (!m)
+        return null
+    var start = Number(m[1])
+    return start > 0 && isFinite(start) ? { route: "event", start: start, at: Number(stamp) } : null
+}
+
+/*
+ * The agenda item for an event that starts at startMs (the launcher's tile writes the occurrence's start). Several
+ * rows can match (a multi-day event has one per day, several events can start together): the row of today first,
+ * else the first in list order. items: buildItems(); null when none.
+ */
+function findEventItem(items, startMs, today) {
+    var first = null
+    var day = dayNumber(today)
+    for (var i = 0; i < items.length; i++) {
+        var it = items[i]
+        if (it.kind !== "event" || !it.start || it.start.getTime() !== startMs)
+            continue
+        if (dayNumber(it.day) === day)
+            return it
+        if (first === null)
+            first = it
+    }
+    return first
+}
+
+/* ---- the phone's side: RSVP and 'Open on phone' (relay acts rsvp and open) ---- */
+
+/* The phone's own id of the event (X-EOS-EVENTID, what the watch sends back in rsvp and open); 0 when none */
+function phoneEventId(extras) {
+    var t = String(extras && extras.eventId !== undefined ? extras.eventId : "").trim()
+    if (!/^\d+$/.test(t))
+        return 0
+    var n = Number(t)
+    return n > 0 && n <= 9007199254740991 ? n : 0
+}
+
+/* RSVP is offered for the phone's events the phone said a response for (X-EOS-RSVP 0..3) */
+function canRespond(event, extras) {
+    return !!event && event.calendarUid === phoneNotebookUid && phoneEventId(extras) > 0
+        && extras.response >= 0 && extras.response <= 3
+}
+
+/* 'Open on phone' is offered for the phone's events */
+function canOpenOnPhone(event, extras) {
+    return !!event && event.calendarUid === phoneNotebookUid && phoneEventId(extras) > 0
+}
+
+/* The answers: Yes 1, Maybe 2, No 3 (gb AsteroidOSPhoneData.rsvp) */
+var rsvpAnswers = [1, 2, 3]
+
+/* The relay act of an answer: {"a":"rsvp","id":<phone event id>,"st":1|2|3} */
+function rsvpAct(extras, st) {
+    return { a: "rsvp", id: phoneEventId(extras), st: st }
+}
+
+/* The relay act that opens the event on the phone: b is the start in SECONDS (gb multiplies it by 1000) */
+function openEventAct(extras, start) {
+    var act = { a: "open", w: "event", id: phoneEventId(extras) }
+    var ms = start ? start.getTime() : 0
+    if (ms > 0)
+        act.b = Math.floor(ms / 1000)
+    return act
+}
+
+/* The relay act of 'View more on phone': the phone's calendar (gb: {"a":"open","w":"calendar"}) */
+function openCalendarAct() {
+    return { a: "open", w: "calendar" }
 }

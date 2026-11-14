@@ -36,15 +36,33 @@ Item {
     /*! The end of the list: the synced window, else today + 7 days. */
     readonly property date windowEnd: Logic.windowEnd(today, syncedUntil)
 
+    /*! The list rows: the items and, once the phone has synced, stock's 'View more on phone' button at the end. */
+    readonly property var rows: phoneSynced ? items.concat([{ kind: "viewMore", key: "viewMore" }]) : items
+    /*! The phone's relay (a test can replace it); nothing is asked before the button is pressed. */
+    property var relay: _relay
+    /*! "", "busy" or "failed" */
+    property string viewMoreState: ""
+
     readonly property alias list: _list
     readonly property alias texts: _texts
 
+    /*! Open the phone's calendar (relay act open, w calendar). */
+    function viewMore() {
+        if (viewMoreState === "busy")
+            return
+        viewMoreState = "busy"
+        page.relay.act(Logic.openCalendarAct(), function (r) {
+            viewMoreState = r && r.ok === true ? "" : "failed"
+        })
+    }
+
     CalendarText { id: _texts }
+    PhoneRelay { id: _relay }
 
     ScalingList {
         id: _list
         anchors.fill: parent
-        model: page.items
+        model: page.rows
         sideMargin: Theme.margin.side
         topMargin: Theme.margin.scaffoldVertical
         bottomMargin: Theme.margin.scaffoldVertical
@@ -64,7 +82,8 @@ Item {
                                : cell.kind === "header" ? headerRow
                                : cell.kind === "spacer" ? spacerRow
                                : cell.kind === "noEvents" || cell.kind === "hint" ? noEventsRow
-                               : cell.kind === "footer" ? footerRow : null
+                               : cell.kind === "footer" ? footerRow
+                               : cell.kind === "viewMore" ? viewMoreRow : null
                 onLoaded: {
                     if ("item" in item)
                         item.item = Qt.binding(function() { return cell.modelData })
@@ -128,6 +147,40 @@ Item {
                 wrapMode: Text.Wrap
                 text: none.item && none.item.kind === "hint" ? _texts.neverSynced
                       : none.item ? Logic.format(_texts.noEventsUntil, [_texts.fullDate(none.item.until)]) : ""
+            }
+        }
+    }
+    Component {
+        id: viewMoreRow
+        // stock's last chip of the list (TimelineDecorations, view_more_on_phone_button): asks the phone to open its calendar
+        Item {
+            id: more
+            property var item
+            readonly property string kind: "viewMore"
+            height: _moreColumn.height + Theme.dp(8)
+            Column {
+                id: _moreColumn
+                width: parent.width
+                spacing: Theme.dp(4)
+                Button {
+                    objectName: "viewMoreButton"
+                    width: parent.width
+                    variant: "tonal"
+                    enabled: page.viewMoreState !== "busy"
+                    iconName: "ios-phone-portrait"
+                    text: _texts.viewMoreOnPhone
+                    onClicked: page.viewMore()
+                }
+                Label {
+                    objectName: "viewMoreError"
+                    visible: page.viewMoreState === "failed"
+                    width: parent.width
+                    role: "bodyMedium"
+                    color: Theme.color.error
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: _texts.openFailed
+                }
             }
         }
     }

@@ -53,6 +53,20 @@ Application {
     readonly property var syncedUntil: Logic.syncedUntilDate(syncedUntilSetting.value)
     readonly property date windowEnd: Logic.windowEnd(today, syncedUntil)
 
+    // The launcher's Agenda tile and the next event complication open an event: before they launch (or raise) the
+    // app they write "event:<startMs>@<nowMs>" here (CR-36). The part before the last "@" is the route; a request
+    // older than 60 s or more than 5 s in the future is ignored; the key is cleared when it has been read.
+    ConfigurationValue {
+        id: openRequest
+        key: "/org/asteroidos/calendar/ui/open"
+        defaultValue: ""
+        onValueChanged: Qt.callLater(app.openRequested)
+    }
+    // the event asked for (its start in ms) until its row exists: the model fills a moment after the app starts
+    property real pendingStart: -1
+    // when it was asked for (ms), for the 60 s limit
+    property real pendingAt: 0
+
     // for the tests
     readonly property alias stack: layerStack
     readonly property alias model: agendaModel
@@ -71,9 +85,43 @@ Application {
                 l.push({ event: o.event, startTime: o.startTime, endTime: o.endTime })
         }
         occurrences = l
+        showPending()
     }
     function recollect() {
         Qt.callLater(collect)
+    }
+
+    function openRequested() {
+        var request = String(openRequest.value || "")
+        if (request === "")
+            return
+        openRequest.value = ""
+        var r = Logic.parseOpenRequest(request, Date.now())
+        if (r === null)
+            return
+        pendingStart = r.start
+        pendingAt = r.at
+        refreshToday()
+        showPending()
+    }
+
+    /*! Open the details of the event that was asked for, once its row is in the list (and while the request is
+        young); nothing runs between requests. */
+    function showPending() {
+        if (pendingStart < 0)
+            return
+        if (Date.now() - pendingAt > Logic.requestMaxAge) {
+            pendingStart = -1
+            return
+        }
+        var items = Logic.buildItems(occurrences, { today: today, syncedUntil: syncedUntil, phoneSynced: phoneNotebook.isValid })
+        var item = Logic.findEventItem(items, pendingStart, today)
+        if (item === null)
+            return
+        pendingStart = -1
+        while (layerStack.layers.length > 0)
+            layerStack.pop(layerStack.currentLayer)
+        layerStack.push(detailsPage, { "item": item })
     }
 
     Connections {
@@ -120,7 +168,10 @@ Application {
             today: app.today
             syncedUntil: app.syncedUntil
             phoneSynced: phoneNotebook.isValid
-            onEventClicked: (item) => layerStack.push(detailsPage, { "item": item })
+            onEventClicked: (item) => {
+                app.pendingStart = -1
+                layerStack.push(detailsPage, { "item": item })
+            }
             onVisibleChanged: if (visible) app.refreshToday()
         }
     }
@@ -129,4 +180,6 @@ Application {
         id: layerStack
         firstPage: agendaPage
     }
+
+    Component.onCompleted: Qt.callLater(openRequested)
 }

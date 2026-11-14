@@ -18,6 +18,7 @@ include(Asteroid6CMakeSettings)
 include(Asteroid6Translations)
 
 ecm_find_qmlmodule(Nemo.Configuration 1.0)
+ecm_find_qmlmodule(Nemo.DBus 2.0)
 ecm_find_qmlmodule(org.nemomobile.calendar 1.0)
 
 add_subdirectory(src)
