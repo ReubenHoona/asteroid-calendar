@@ -17,519 +17,116 @@
  */
 
 import QtQuick
-import QtQuick.Effects
 import org.nemomobile.calendar
 import Nemo.Configuration
 import org.asteroid.controls
-import org.asteroid.utils
+import "CalendarLogic.js" as Logic
 
+/*
+ * The Calendar app (W2-app-calendar), as stock CP3A's Calendar:
+ *  - a black scaffold with the time at the top (weather-calendar-14);
+ *  - the agenda (AgendaPage): one list from today to the end of the window the
+ *    phone synced, a header per day, a card per event (22 ... 30);
+ *  - a tap opens the read-only details (EventDetails, 32) with 'Delete event'
+ *    and its confirmation (33);
+ *  - no event creation, no editing, no month or day picker (35, Q51).
+ * It only reads: the phone's events come from asteroid-btsyncd into the
+ * mkcal notebook "Phone" and the sync window end from dconf.
+ */
 Application {
     id: app
 
-    centerColor: "#CC7700"
-    outerColor: "#0C0300"
+    // Wear OS apps are black with the time curved along the top
+    showTime: true
 
-    property color overlayColor: "#77000000"
-    property color accentColor: "#aaCC5800"
+    /*! Today at 00:00; it is taken again whenever the app comes back to the front (no timer). */
+    property date today: Logic.startOfDay(new Date())
+    /*! The AgendaModel rows as plain objects, for the logic. */
+    property var occurrences: []
 
-    property date currentDate: new Date()
-
-    property int year: currentDate.getFullYear()
-    property int month: currentDate.getMonth()
-    property int day: currentDate.getDate()
-
-    function zeroPadding(i) {
-        if (i > 9) return i
-        else       return "0" + i
-    }
-
+    // the end of the window the phone synced (Gadgetbridge look-ahead); unset: 0
     ConfigurationValue {
-        id: use12H
+        id: syncedUntilSetting
+        key: "/org/asteroidos/calendar/synced-until"
+        defaultValue: 0
+    }
+    readonly property var syncedUntil: Logic.syncedUntilDate(syncedUntilSetting.value)
+    readonly property date windowEnd: Logic.windowEnd(today, syncedUntil)
 
-        key: "/org/asteroidos/settings/use-12h-format"
-        defaultValue: false
+    // for the tests
+    readonly property alias stack: layerStack
+    readonly property alias model: agendaModel
+
+    function refreshToday() {
+        var t = Logic.startOfDay(new Date())
+        if (t.getTime() !== today.getTime())
+            today = t
     }
 
-    Component  { id: eventDialogLayer;   EventDialog   { } }
-    Component  { id: monthSelectorLayer; MonthSelector { } }
+    function collect() {
+        var l = []
+        for (var i = 0; i < collector.count; i++) {
+            var o = collector.objectAt(i)
+            if (o && o.event)
+                l.push({ event: o.event, startTime: o.startTime, endTime: o.endTime })
+        }
+        occurrences = l
+    }
+    function recollect() {
+        Qt.callLater(collect)
+    }
 
-    LayerStack {
-        id: layerStack
-        firstPage: firstPageComponent
+    Connections {
+        target: Qt.application
+        function onStateChanged() {
+            if (Qt.application.state === Qt.ApplicationActive)
+                app.refreshToday()
+        }
     }
 
     AgendaModel {
         id: agendaModel
-        startDate: new Date(year, month, day, 0, 0, 0)
-        endDate: new Date(year, month, day, 23, 59, 59)
+        startDate: app.today
+        endDate: app.windowEnd
+    }
+    Instantiator {
+        id: collector
+        model: agendaModel
+        delegate: QtObject {
+            property QtObject event: model.event
+            property date startTime: model.occurrence.startTime
+            property date endTime: model.occurrence.endTime
+        }
+        onObjectAdded: app.recollect()
+        onObjectRemoved: app.recollect()
+    }
+
+    // the Phone notebook exists once asteroid-btsyncd has synced at least once
+    NotebookQuery {
+        id: phoneNotebook
+        targetUid: Logic.phoneNotebookUid
     }
 
     Component {
-        id: firstPageComponent
-
-        Item {
-            property bool isDayView: agenda.contentY >= -dayInfoHeight
-            property int daySelectorHeight: height * 5 / 7
-            property int dayInfoHeight: height / 7
-
-            onDaySelectorHeightChanged: agenda.contentY = -daySelectorHeight
-
-            function animateToDayView() {
-                yAnimation.to = DeviceSpecs.hasRoundScreen ? -dayInfoHeight : 0
-                yAnimation.start()
-            }
-
-            function animateToMonthView() {
-                yAnimation.to = -daySelectorHeight
-                yAnimation.start()
-            }
-
-            ListView {
-                id: agenda
-
-                anchors.fill: parent
-                clip: true
-                anchors.topMargin: dayInfoHeight
-
-                model: agendaModel
-
-                NumberAnimation on contentY {
-                    id: yAnimation
-
-                    duration: 200
-                }
-
-                onMovementEnded: {
-                    if(!isDayView) {
-                        if(contentY > -daySelectorHeight / 2) animateToDayView()
-                        else animateToMonthView()
-                    }
-                }
-
-                delegate: MouseArea {
-                    height: agenda.contentY > -daySelectorHeight / 2 ?
-                                dayInfoHeight * 1.186 :
-                                DeviceSpecs.hasRoundScreen ?
-                                    dayInfoHeight * .94 :
-                                    dayInfoHeight
-                    width: parent.width
-
-                    Behavior on height { NumberAnimation { duration: 200 } }
-
-                    MultiEffect {
-                        anchors.fill: hour
-                        source: hour
-                        autoPaddingEnabled: true
-                        shadowEnabled: true
-                        shadowColor: overlayColor
-                        shadowHorizontalOffset: 1
-                        shadowVerticalOffset: 1
-                        shadowBlur: .3
-                        blurMax: 8
-                    }
-
-                    MultiEffect {
-                        anchors.fill: title
-                        source: title
-                        autoPaddingEnabled: true
-                        shadowEnabled: true
-                        shadowColor: overlayColor
-                        shadowHorizontalOffset: 1
-                        shadowVerticalOffset: 1
-                        shadowBlur: .3
-                        blurMax: 8
-                    }
-
-                    Label {
-                        id: hour
-
-                        text: Qt.formatTime(model.occurrence.startTime, "hh:mm")
-                        anchors {
-                            verticalCenter: parent.verticalCenter
-                            verticalCenterOffset: -parent.height * .02
-                            left: parent.left
-                            leftMargin: parent.width * .23
-                        }
-                        horizontalAlignment: Text.AlignRight
-                        verticalAlignment: Text.AlignVCenter
-                        width: parent.width / 4
-                        font.pixelSize: parent.height / 2
-                        font.styleName: "SemiCondensed SemiBold"
-
-                        Label {
-                            id: ap
-
-                            text: Qt.formatTime(model.occurrence.startTime, use12H.value ? "AP" : "")
-                            anchors {
-                                bottom: parent.top
-                                bottomMargin: -parent.height * .34
-                                left: parent.right
-                                leftMargin: -parent.width * .94
-                            }
-                            opacity: .8
-                            horizontalAlignment: Text.AlignRight
-                            verticalAlignment: Text.AlignVCenter
-                            width: parent.width
-                            font.pixelSize: parent.height / 2.8
-                            font.styleName: "SemiCondensed Medium"
-                        }
-                    }
-
-                    Label {
-                        id: title
-
-                        text: model.event.displayLabel
-                        horizontalAlignment: Text.AlignLeft
-                        verticalAlignment: Text.AlignVCenter
-                        anchors {
-                            left: hour.right
-                            right: parent.right
-                            leftMargin: parent.width * .04
-                            verticalCenter: hour.verticalCenter
-                        }
-                        font.pixelSize: parent.height / 2
-                        font.styleName: "SemiCondensed"
-
-                    }
-
-                    Item {
-                        anchors {
-                            bottom: parent.bottom
-                            horizontalCenter: parent.horizontalCenter
-                        }
-                        height: parent.height * .04
-                        width: parent.width
-
-                        Rectangle {
-                            anchors.fill: parent
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: .1; color: "#00000000" }
-                                GradientStop { position: .5; color: "#44000000" }
-                                GradientStop { position: .9; color: "#00000000" }
-                            }
-                        }
-                    }
-
-                    onClicked: layerStack.push(eventDialogLayer, {"event": model.event})
-                }
-
-                header: Item { height: daySelectorHeight }
-                footer: Item { height: Math.max(2 * dayInfoHeight, agenda.height - agenda.count * dayInfoHeight * 1.186) - (DeviceSpecs.hasRoundScreen ? dayInfoHeight / 2 : 0) }
-            }
-
-            Rectangle {
-                id: addBubble
-
-                anchors {
-                    centerIn: parent
-                    verticalCenterOffset: parent.height * .366
-                }
-                scale: agenda.count > 0 ? 1 : 1.4
-                opacity: !isDayView ? 0 : 1
-                width: parent.height * .18
-                height: width
-                radius: width
-                color: overlayColor
-
-                Behavior on opacity { NumberAnimation { duration: 100 } }
-
-                IconButton {
-                    id: addIcon
-
-                    iconName:  "ios-add"
-                    anchors.centerIn: addBubble
-                    enabled: opacity === 1.0
-                    onClicked: layerStack.push(eventDialogLayer)
-                }
-            }
-
-
-            Item {
-                id: daySelector
-
-                anchors {
-                    top: parent.top
-                    right: parent.right
-                    left: parent.left
-                }
-                height: {
-                    if(isDayView)    return 0;
-                    if(agenda.contentY < -daySelectorHeight) return daySelectorHeight
-                    else                                     return -agenda.contentY
-                }
-                visible: height > 0
-                enabled: height > 0
-
-                Rectangle {
-                    id: monthInfo
-
-                    color: overlayColor
-                    anchors {
-                        top: parent.top
-                        left: parent.left
-                        right: parent.right
-                    }
-                    height: 2 * parent.height * dayInfoHeight / daySelectorHeight
-
-                    Label {
-                        text: year
-                        anchors {
-                            fill: parent
-                            bottomMargin: Dims.h(10)
-                        }
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        font {
-                            pixelSize: parent.height/5
-                            styleName: "Light"
-                            kerning: !yAnimation.running
-                            preferShaping: !yAnimation.running
-                        }
-                    }
-
-                    Label {
-                        id: monthDisplay
-
-                        text: Qt.locale().monthName(month, Locale.LongFormat)
-                        anchors {
-                            fill: parent
-                            topMargin: Dims.h(7)
-                        }
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                        font {
-                            pixelSize: parent.height/3.2
-                            styleName: "Condensed"
-                            capitalization: Font.Capitalize
-                            kerning: !yAnimation.running
-                            preferShaping: !yAnimation.running
-                        }
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: layerStack.push(monthSelectorLayer)
-                    }
-                }
-
-                ListView {
-                    id: dayLV
-                    anchors {
-                        top: monthInfo.bottom
-                        horizontalCenter: parent.horizontalCenter
-                        bottom: parent.bottom
-                    }
-                    width: Dims.w(84)
-                    model: new Date(year, month+1, 0).getDate();
-                    orientation: ListView.Horizontal
-
-                    delegate: Item {
-                        id: listRow
-
-                        width: dayLV.width / 2.5
-                        height: dayLV.height
-                        clip: false
-
-                        Image {
-                            anchors.centerIn: parent
-                            width: parent.height
-                            height: width
-                            smooth: !yAnimation.running
-                            opacity: listRow.ListView.isCurrentItem ? 1 : 0
-                            source: index === 0 ? "day-background-leftstop.svg" : (index+1) ===  dayLV.count ? "day-background-rightstop.svg" : "day-background.svg"
-
-                            Behavior on opacity { NumberAnimation { duration: 150 } }
-                        }
-
-                        MultiEffect {
-                            anchors.fill: countBubble
-                            visible: listRow.ListView.isCurrentItem && agenda.count > 0
-                            opacity: listRow.ListView.isCurrentItem && agenda.count > 0 ? 1 : 0
-                            source: countBubble
-                            autoPaddingEnabled: true
-                            shadowEnabled: true
-                            shadowColor: overlayColor
-                            shadowHorizontalOffset: 1.4
-                            shadowVerticalOffset: 1.4
-                            shadowBlur: .3
-                            blurMax: 8
-                        }
-
-                        Rectangle {
-                            id: countBubble
-
-                            visible: listRow.ListView.isCurrentItem && agenda.count > 0
-                            opacity: listRow.ListView.isCurrentItem && agenda.count > 0 ? 1 : 0
-                            anchors {
-                                centerIn: parent
-                                verticalCenterOffset: -parent.height * .3
-                                horizontalCenterOffset: index > 8 ? parent.height * .35 : parent.height * .20
-                            }
-                            width: parent.height * .23
-                            height: width
-                            radius: width
-                            color: accentColor
-
-                            Behavior on opacity { NumberAnimation { duration: 150 } }
-
-                            Label {
-                                text: agenda.count
-                                anchors {
-                                    fill: countBubble
-                                    bottomMargin: parent.height * .03
-                                }
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                font {
-                                    pixelSize: parent.height/1.6
-                                    styleName: "Condensed Bold"
-                                    letterSpacing: -parent.width * .03
-                                    kerning: !yAnimation.running
-                                    preferShaping: !yAnimation.running
-                                }
-                            }
-                        }
-
-                        MultiEffect {
-                            anchors.fill: rowShadow
-                            source: rowShadow
-                            autoPaddingEnabled: true
-                            shadowEnabled: true
-                            shadowColor: overlayColor
-                            shadowHorizontalOffset: 1.6
-                            shadowVerticalOffset: 1.6
-                            shadowBlur: .3
-                            blurMax: 8
-                        }
-
-                        Item {
-                            id: rowShadow
-
-                            anchors.fill: parent
-                            clip: false
-
-                            Label {
-                                text: index + 1
-                                clip: false
-                                anchors {
-                                    centerIn: parent
-                                    verticalCenterOffset: listRow.ListView.isCurrentItem ? -Dims.h(4.5) : -Dims.h(.6)
-                                }
-                                opacity: listRow.ListView.isCurrentItem ? 1 : .6
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                font {
-                                    pixelSize: parent.height / 2.4
-                                    styleName: listRow.ListView.isCurrentItem ? "Condensed Bold" : "Condensed Medium"
-                                    capitalization: Font.Capitalize
-                                    letterSpacing: -parent.width * .02
-                                    kerning: !yAnimation.running
-                                    preferShaping: !yAnimation.running
-                                }
-                                scale: listRow.ListView.isCurrentItem ? 1.5 : 1
-
-                                Behavior on scale { NumberAnimation { duration: 150 } }
-                                Behavior on opacity { NumberAnimation { duration: 150 } }
-                                Behavior on anchors.verticalCenterOffset { NumberAnimation { duration: 150 } }
-                            }
-
-                            Label {
-                                text: Qt.locale().dayName(new Date(year, month, index + 1).getDay(), Locale.LongFormat)
-                                clip: false
-                                anchors {
-                                    centerIn: parent
-                                    verticalCenterOffset: listRow.ListView.isCurrentItem ? Dims.h(11) : Dims.h(10)
-                                }
-                                opacity: listRow.ListView.isCurrentItem ? 1 : .7
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                font {
-                                    pixelSize: parent.height / 9
-                                    capitalization: Font.Capitalize
-                                    styleName: "SemiCondensed"
-                                    kerning: !yAnimation.running
-                                    preferShaping: !yAnimation.running
-                                }
-                                scale: listRow.ListView.isCurrentItem ? 1.5 : 1
-
-                                Behavior on scale { NumberAnimation { duration: 150 } }
-                                Behavior on opacity { NumberAnimation { duration: 150 } }
-                                Behavior on anchors.verticalCenterOffset { NumberAnimation { duration: 150 } }
-                            }
-                        }
-
-                        MouseArea {
-                            enabled: parent.ListView.isCurrentItem
-                            anchors.fill: parent
-                            onClicked: animateToDayView()
-                        }
-                    }
-
-                    preferredHighlightBegin: width / 2 - dayLV.width / 5
-                    preferredHighlightEnd: width / 2 + dayLV.width / 5
-                    highlightRangeMode: ListView.StrictlyEnforceRange
-                    snapMode: ListView.SnapToItem
-                    currentIndex: day - 1
-                    onCurrentIndexChanged: day = currentIndex + 1
-                    spacing: 1 / count
-                }
-            }
-
-            Label {
-                text: year + "/" + zeroPadding(month+1) + "/" + zeroPadding(day)
-                opacity: isDayView ? 1 : 0
-                anchors {
-                    bottom: dayInfo.top
-                    bottomMargin: parent.height * .01
-                    horizontalCenter: parent.horizontalCenter
-                }
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                font {
-                    pixelSize: parent.height / 16
-                    styleName: "SemiCondensed"
-                }
-
-                Behavior on opacity { NumberAnimation { duration: 100 } }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: !isDayView ? animateToDayView() : animateToMonthView()
-                }
-            }
-
-            Rectangle {
-                id: dayInfo
-
-                anchors {
-                    left: parent.left
-                    right: parent.right
-                    top: daySelector.bottom
-                    topMargin: {
-                        if(agenda.contentY >= 0)  return dayInfoHeight
-                        if(!isDayView) return 0
-                        else return dayInfoHeight - daySelector.height
-                    }
-                }
-                Component.onCompleted: if(!DeviceSpecs.hasRoundScreen) anchors.topMargin = 0
-                height: dayInfoHeight
-                color: overlayColor
-
-                Label {
-                    //% "%1 Events on %2"
-                    text: qsTrId("id-events-recap").arg(agenda.count).arg(Qt.locale().dayName(new Date(year, month, day).getDay(), Locale.ShortFormat))
-                    anchors.fill: parent
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    font.pixelSize: height / 2.2
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: !isDayView ? animateToDayView() : animateToMonthView()
-                }
-            }
+        id: detailsPage
+        EventDetails {
+            today: app.today
         }
+    }
+    Component {
+        id: agendaPage
+        AgendaPage {
+            occurrences: app.occurrences
+            today: app.today
+            syncedUntil: app.syncedUntil
+            phoneSynced: phoneNotebook.isValid
+            onEventClicked: (item) => layerStack.push(detailsPage, { "item": item })
+            onVisibleChanged: if (visible) app.refreshToday()
+        }
+    }
+
+    LayerStack {
+        id: layerStack
+        firstPage: agendaPage
     }
 }

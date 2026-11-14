@@ -1,7 +1,0 @@
-<RCC>
-    <qresource prefix="/Calendar/">
-        <file>day-background.svg</file>
-        <file>day-background-leftstop.svg</file>
-        <file>day-background-rightstop.svg</file>
-    </qresource>
-</RCC>
