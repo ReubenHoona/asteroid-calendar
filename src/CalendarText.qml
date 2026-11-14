@@ -60,8 +60,15 @@ QtObject {
     function dayName(d) {
         return locale.dayName(d.getDay(), Locale.ShortFormat)
     }
-    // 'Thu, 12 Nov': the weekday and the date, abbreviated, no year (flags 32794)
+    // Day header of other days, 'Thu, 12 November' (en_NZ), 'Thu, November 12' (en_US): the weekday
+    // abbreviated, the month in full, no year. Stock lwl.java:227 passes 32794 = ABBREV_WEEKDAY
+    // 0x8000 + SHOW_DATE 0x10 + NO_YEAR 0x8 + SHOW_WEEKDAY 0x2; ABBREV_MONTH (0x10000) is not set.
     function otherDay(d) {
+        return TimeFormat.date(d, "EEEMMMMd")
+    }
+    // Details date of a single day, 'Thu, 12 Nov': the details formatter (mqy.b) adds ABBREV_MONTH
+    // (65536, mno.java:27 'i | 16'), so the month is abbreviated here.
+    function detailDay(d) {
         return TimeFormat.date(d, "EEEMMMd")
     }
     // 'Thu, 12 - Sat, 14 Nov'
@@ -123,7 +130,7 @@ QtObject {
         allDay: allDay,
         today: today,
         tomorrow: tomorrow,
-        otherDay: otherDay,
+        otherDay: detailDay,
         dateRange: dateRange,
         time: function(d) { return TimeFormat.time(d) },
         range: function(a, b) { return TimeFormat.range(a, b) },
