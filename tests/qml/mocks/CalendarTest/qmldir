@@ -1,0 +1,4 @@
+module CalendarTest
+singleton Bus 1.0 Bus.qml
+singleton Notebooks 1.0 Notebooks.qml
+TestEvent 1.0 TestEvent.qml

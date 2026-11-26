@@ -1,0 +1,3 @@
+module org.nemomobile.calendar
+AgendaModel 1.0 AgendaModel.qml
+NotebookQuery 1.0 NotebookQuery.qml
