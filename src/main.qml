@@ -55,7 +55,8 @@ Application {
 
     // The launcher's Agenda tile and the next event complication open an event: before they launch (or raise) the
     // app they write "event:<startMs>@<nowMs>" here (CR-36). The part before the last "@" is the route; a request
-    // older than 60 s or more than 5 s in the future is ignored; the key is cleared when it has been read.
+    // older than 60 s or more than 5 s in the future is ignored, and so is a repeat of the request handled last; the
+    // key is cleared when it has been read.
     ConfigurationValue {
         id: openRequest
         key: "/org/asteroidos/calendar/ui/open"
@@ -66,6 +67,8 @@ Application {
     property real pendingStart: -1
     // when it was asked for (ms), for the 60 s limit
     property real pendingAt: 0
+    // the request handled last: the same value seen again (written once more, a change delivered twice) is no new tap
+    property string lastRequest: ""
 
     // for the tests
     readonly property alias stack: layerStack
@@ -96,6 +99,9 @@ Application {
         if (request === "")
             return
         openRequest.value = ""
+        if (request === lastRequest)
+            return
+        lastRequest = request
         var r = Logic.parseOpenRequest(request, Date.now())
         if (r === null)
             return
