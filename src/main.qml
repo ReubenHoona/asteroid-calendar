@@ -182,10 +182,23 @@ Application {
         }
     }
 
+    // The agenda is made once the app has its size (makeAgenda()): main.qml is made at 0 x 0 and gets
+    // the window's size after it, so an agenda made with the app was laid out at 0 x 0 and again at
+    // full size.
     LayerStack {
         id: layerStack
-        firstPage: agendaPage
     }
+    property bool agendaMade: false
+    function makeAgenda() {
+        if (agendaMade || width <= 0)
+            return
+        agendaMade = true
+        layerStack.firstPage = agendaPage
+    }
+    onWidthChanged: makeAgenda()
 
-    Component.onCompleted: Qt.callLater(openRequested)
+    Component.onCompleted: {
+        makeAgenda()
+        Qt.callLater(openRequested)
+    }
 }
