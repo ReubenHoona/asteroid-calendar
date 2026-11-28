@@ -22,7 +22,7 @@ QtObject {
     readonly property string phoneIface: "org.asteroidos.btsyncd.Phone"
     // what a connected Gadgetbridge with the phone data actions lists (gb AsteroidOSPhoneData.ACTIONS and the base acts)
     readonly property var fullActions: ["nav", "contacts", "sms", "call", "convs", "msgs", "msend", "mread", "rsvp", "open",
-                                        "wifipw", "cam"]
+                                        "wifipw", "cam", "evdel"]
 
     // Actions()' reply; null: the call fails (btsyncd is not running)
     property var actions: []

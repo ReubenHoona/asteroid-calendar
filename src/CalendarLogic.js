@@ -272,11 +272,12 @@ function triggerMinutes(value) {
  * What asteroid-btsyncd stored on the event (calendarservice.h): the event
  * colour X-EOS-COLOR, the user's response X-EOS-RSVP (0 needs action, 1
  * accepted, 2 tentative, 3 declined, -1 unknown), X-EOS-ORGANIZER,
- * X-EOS-CALENDAR (the phone's calendar name), X-EOS-EVENTID, and the
- * reminders (display alarms with a start offset).
+ * X-EOS-CALENDAR (the phone's calendar name), X-EOS-EVENTID, the guests
+ * X-EOS-GUESTS (R5 D-08, D-16: the phone's JSON, percent-encoded; see
+ * parseGuests) and the reminders (display alarms with a start offset).
  */
 function parseExtras(ics) {
-    var out = { color: "", response: -1, organizer: "", calendar: "", eventId: "", reminders: [] }
+    var out = { color: "", response: -1, organizer: "", calendar: "", eventId: "", reminders: [], guests: null }
     var inEvent = false, inAlarm = false, alarmMinutes = null, alarmEnd = false
     var lines = unfold(ics)
     for (var i = 0; i < lines.length; i++) {
@@ -319,9 +320,65 @@ function parseExtras(ics) {
         case "X-EOS-ORGANIZER": out.organizer = unescapeText(p.value); break
         case "X-EOS-CALENDAR": out.calendar = unescapeText(p.value); break
         case "X-EOS-EVENTID": out.eventId = unescapeText(p.value); break
+        case "X-EOS-GUESTS": out.guests = parseGuests(p.value); break
         }
     }
     return out
+}
+
+/*
+ * The guests of an event (R5 D-08, D-16) as btsyncd keeps them: X-EOS-GUESTS, the phone's JSON (Gadgetbridge's
+ * <gs>) percent-encoded: { n: guests, c: [yes, maybe, no, not answered], x: 1 every guest but the user declined,
+ * h: "o" hidden by the organizer | "t" too many to show, g: [[name, response 0..3, flags 1 organizer 2 the user]] }.
+ * -> { count, yes, maybe, no, awaiting, everyoneElseDeclined, note: "" | "hidden" | "tooMany",
+ *      list: [{ name, response, organizer, self }] }, null for anything else or no guest
+ */
+function parseGuests(text) {
+    var d
+    try {
+        d = JSON.parse(decodeURIComponent(String(text || "").trim()))
+    } catch (e) {
+        return null
+    }
+    if (!d || typeof d !== "object" || !(d.n > 0) || !Array.isArray(d.c) || d.c.length !== 4)
+        return null
+    var count = function (v) { return typeof v === "number" && v >= 0 ? Math.floor(v) : 0 }
+    var out = { count: Math.floor(d.n), yes: count(d.c[0]), maybe: count(d.c[1]), no: count(d.c[2]),
+                awaiting: count(d.c[3]), everyoneElseDeclined: d.x === 1,
+                note: d.h === "o" ? "hidden" : d.h === "t" ? "tooMany" : "", list: [] }
+    var rows = Array.isArray(d.g) ? d.g : []
+    for (var i = 0; i < rows.length; i++) {
+        var r = rows[i]
+        if (!Array.isArray(r) || typeof r[0] !== "string" || r[0].trim() === "")
+            continue
+        var st = r[1] >= 1 && r[1] <= 3 ? r[1] : 0
+        var flags = typeof r[2] === "number" ? r[2] : 0
+        out.list.push({ name: r[0].trim(), response: st, organizer: (flags & 1) !== 0, self: (flags & 2) !== 0 })
+    }
+    return out
+}
+
+/*
+ * The guests segment's summary (lsn.java:452-495): the title "N guests"; under it, when nobody said yes or no,
+ * "N awaiting", else "N yes", "N no", or both. f: { guests(n), yes(n), no(n), awaiting(n), both (%1 %2) }
+ */
+function guestsSummary(g, f) {
+    var detail
+    if (g.yes === 0 && g.no === 0)
+        detail = f.awaiting(g.awaiting)
+    else if (g.no === 0)
+        detail = f.yes(g.yes)
+    else if (g.yes === 0)
+        detail = f.no(g.no)
+    else
+        detail = format(f.both, [f.yes(g.yes), f.no(g.no)])
+    return { title: f.guests(g.count), detail: detail }
+}
+
+/* The agenda card's outline (lxv.java:198-205): not answered yet, or every other guest declined */
+function outlined(extras) {
+    return !!extras && (extras.response === 0 || (extras.guests !== null && extras.guests !== undefined
+                                                    && extras.guests.everyoneElseDeclined === true))
 }
 
 /* The card colour (lxv.java:222-243): the event colour (its alpha ignored),
@@ -423,6 +480,9 @@ function detailRows(event, extras, reminders, deletable, phone) {
     var rows = ["title", "when"]
     if (String(event.location || "").trim() !== "")
         rows.push("location")
+    // the guests come after the location (lmg.java:118-248, E67 4.)
+    if (extras && extras.guests)
+        rows.push("guests")
     if (String(event.description || "").trim() !== "")
         rows.push("description")
     if (reminders.length > 0)
@@ -523,6 +583,21 @@ function openEventAct(extras, start) {
     if (ms > 0)
         act.b = Math.floor(ms / 1000)
     return act
+}
+
+/* The relay act of 'Delete event' for a phone event (D-14): the phone deletes it, one occurrence of a repeating
+   event by its start (b, seconds); gb AsteroidOSPhoneData.eventDelete */
+function deleteAct(extras, start) {
+    var act = { a: "evdel", id: phoneEventId(extras) }
+    var ms = start ? start.getTime() : 0
+    if (ms > 0)
+        act.b = Math.floor(ms / 1000)
+    return act
+}
+
+/* The relay act of a tap on the location (D-15): the phone's maps show the place (gb open w=map, geo:0,0?q=) */
+function mapAct(location) {
+    return { a: "open", w: "map", q: String(location || "").replace(/\s+/g, " ").trim() }
 }
 
 /* The relay act of 'View more on phone': the phone's calendar (gb: {"a":"open","w":"calendar"}) */

@@ -19,7 +19,22 @@ import "CalendarLogic.js" as Logic
  * 'Delete event', stock's two phone segments (lqx, lpj, lqq): the RSVP segment
  * ('Going?' with Yes / Maybe / No, then 'Responded Yes' with 'Change RSVP') and
  * the 'Open on phone' chip. Both go through Gadgetbridge (PhoneRelay: the acts
- * rsvp and open); the guest list is not shown (the phone does not send it).
+ * rsvp and open).
+ * R5 (AUDIT-72):
+ *  - D-08 the guests segment after the location (GuestsSegment, lqe/lqf,
+ *    lqg.java:77-545, lsn.java:430-495): a people icon, "N guests" and under
+ *    it "N yes, N no" or "N awaiting"; the note "Guests hidden by the
+ *    organizer" / "Too many guests to show"; a row per guest the phone sent:
+ *    a 25 dp slot with an 18 dp letter disc and the 14 dp response badge
+ *    (guests_segment_yes/maybe/no_icon: #ceead6 / #e8eaed / #fad2cf with a
+ *    black ring), the name, "Organizer" under the organizer's.
+ *  - D-14 'Delete event' for the phone's events (with a phone id): after the
+ *    question the phone deletes it (act evdel; one occurrence of a repeating
+ *    event), then the watch's copy goes and the page closes; a failure says
+ *    "Event could not be deleted." (lnj.java:280-287).
+ *  - D-15 a tap on the location shows the place in the phone's maps (act
+ *    open w=map; stock opens Maps with geo:0,0?q=, mar.java:47-70; the
+ *    watch's Maps has no place search), "Opened on your phone" after it.
  */
 Item {
     id: page
@@ -28,8 +43,9 @@ Item {
     property var item
     /*! Today, at the start of the day. */
     property date today: Logic.startOfDay(new Date())
-    /*! Gadgetbridge can delete the phone's events (the del-req request exists). */
-    property bool phoneCanDelete: false
+    /*! A phone event can be deleted on the phone (Gadgetbridge's evdel, D-14): it has the phone's id. Nothing
+     *  is asked before Delete is pressed: a phone app without the act answers "Event could not be deleted." */
+    property bool phoneCanDelete: canOpenOnPhone
     /*! The phone's relay (a test can replace it); nothing is asked before a button is pressed. */
     property var relay: _relay
     // LayerStack's push sets these
@@ -67,6 +83,15 @@ Item {
     property bool rsvpFailed: false
     /*! "", "busy", "ok" or "failed" */
     property string openState: ""
+    /*! the location's tap (D-15): "", "busy", "ok" or "failed" */
+    property string mapState: ""
+    /*! Delete (D-14): "", "busy" or "failed" */
+    property string deleteState: ""
+    // false once the page has gone: a late answer is dropped
+    property var _life: ({ open: true })
+    Component.onDestruction: _life.open = false
+    readonly property var guests: extras.guests
+    readonly property var guestsSummary: guests ? Logic.guestsSummary(guests, _texts.guestsFormat) : null
     readonly property var rows: event ? Logic.detailRows(event, extras, reminderTexts, deletable,
                                                          { rsvp: canRespond, open: canOpenOnPhone }) : []
     readonly property string titleText: item ? Logic.title({ event: event, dayCount: 1, dayIndex: 1 }, _texts.lineFormat) : ""
@@ -104,12 +129,44 @@ Item {
         })
     }
 
-    /*! Delete the event and leave the details. */
+    /*! Delete the event and leave the details; a phone event is deleted on the phone first (D-14). */
     function deleteEvent() {
-        if (event && deletable)
+        if (!event || !deletable || deleteState === "busy")
+            return
+        if (event.calendarUid !== Logic.phoneNotebookUid) {
             event.deleteEvent()
-        if (pop)
-            pop()
+            if (pop)
+                pop()
+            return
+        }
+        deleteState = "busy"
+        var life = _life
+        page.relay.act(Logic.deleteAct(extras, item ? item.start : null), function (r) {
+            if (!life.open)
+                return
+            if (r && r.ok === true) {
+                deleteState = ""
+                // the watch's copy goes at once; the phone's next sync agrees
+                if (page.event)
+                    page.event.deleteEvent()
+                if (pop)
+                    pop()
+            } else {
+                deleteState = "failed"
+            }
+        })
+    }
+
+    /*! The location's tap: the place in the phone's maps (D-15). */
+    function openMap() {
+        if (mapState === "busy" || !event || String(event.location || "").trim() === "")
+            return
+        mapState = "busy"
+        var life = _life
+        page.relay.act(Logic.mapAct(event.location), function (r) {
+            if (life.open)
+                mapState = r && r.ok === true ? "ok" : "failed"
+        })
     }
 
     CalendarText { id: _texts }
@@ -141,6 +198,7 @@ Item {
                     case "title": return titleRow
                     case "when": return whenRow
                     case "location": return locationRow
+                    case "guests": return guestsRow
                     case "description": return descriptionRow
                     case "reminders": return remindersRow
                     case "calendar": return calendarRow
@@ -199,13 +257,15 @@ Item {
             }
         }
     }
-    // the place, as text: a map app that can search is not on the watch
+    // the place; a tap shows it in the phone's maps (D-15: stock's LocationSegment opens Maps)
     Component {
         id: locationRow
         DetailRow {
+            id: _locationRow
             objectName: "locationRow"
             iconName: "ios-pin-outline"
             Accessible.name: _texts.locationLabel
+            Accessible.role: Accessible.Button
             Label {
                 objectName: "locationLabel"
                 width: parent.width
@@ -215,6 +275,140 @@ Item {
                 wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignLeft
             }
+            Label {
+                objectName: "mapStatus"
+                visible: page.mapState === "ok" || page.mapState === "failed"
+                width: parent.width
+                role: "labelSmall"
+                color: page.mapState === "failed" ? Theme.color.error : Theme.color.onSurfaceVariant
+                text: page.mapState === "failed" ? _texts.openFailed : _texts.openedOnPhone
+                wrapMode: Text.Wrap
+                horizontalAlignment: Text.AlignLeft
+            }
+            MouseArea {
+                objectName: "locationButton"
+                parent: _locationRow
+                anchors.fill: parent
+                enabled: page.mapState !== "busy"
+                onClicked: page.openMap()
+            }
+        }
+    }
+    // the guests (D-08): the summary, the note, a row per guest
+    Component {
+        id: guestsRow
+        Column {
+            objectName: "guestsSegment"
+            width: parent ? parent.width : 0
+            DetailRow {
+                objectName: "guestsSummary"
+                iconName: "ios-people-outline"
+                Accessible.name: page.guestsSummary ? page.guestsSummary.title + ", " + page.guestsSummary.detail : ""
+                Label {
+                    objectName: "guestsTitle"
+                    width: parent.width
+                    role: "bodyMedium"
+                    color: Theme.color.onSurface
+                    text: page.guestsSummary ? page.guestsSummary.title : ""
+                    horizontalAlignment: Text.AlignLeft
+                }
+                Label {
+                    objectName: "guestsDetail"
+                    width: parent.width
+                    role: "labelSmall"
+                    color: Theme.color.onSurfaceVariant
+                    text: page.guestsSummary ? page.guestsSummary.detail : ""
+                    horizontalAlignment: Text.AlignLeft
+                }
+                Label {
+                    objectName: "guestsNote"
+                    visible: text !== ""
+                    width: parent.width
+                    role: "labelSmall"
+                    color: Theme.color.onSurfaceVariant
+                    wrapMode: Text.Wrap
+                    text: !page.guests ? "" : page.guests.note === "hidden" ? _texts.guestsHidden
+                                                : page.guests.note === "tooMany" ? _texts.guestsTooMany : ""
+                    horizontalAlignment: Text.AlignLeft
+                }
+            }
+            Repeater {
+                model: page.guests ? page.guests.list : []
+                delegate: Item {
+                    id: guestRow
+                    required property var modelData
+                    objectName: "guestRow"
+                    width: parent ? parent.width : 0
+                    height: Math.max(_slot.height, _names.implicitHeight) + Theme.dp(8)
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: _texts.guestDescription(modelData.name, modelData.response)
+                    // the 25 dp slot under the summary's icon: the letter disc and the response badge
+                    Item {
+                        id: _slot
+                        x: Theme.dp(6) + (Theme.dp(26) - width) / 2
+                        width: Theme.dp(25)
+                        height: width
+                        Rectangle {
+                            width: Theme.dp(18)
+                            height: width
+                            radius: width / 2
+                            color: Theme.color.surfaceContainerHigh
+                            Label {
+                                anchors.centerIn: parent
+                                role: "labelSmall"
+                                color: Theme.color.onSurface
+                                text: guestRow.modelData.name.charAt(0).toUpperCase()
+                            }
+                        }
+                        Rectangle {
+                            objectName: "guestBadge"
+                            visible: guestRow.modelData.response > 0
+                            readonly property int response: guestRow.modelData.response
+                            x: parent.width - width
+                            y: parent.height - height
+                            width: Theme.dp(14)
+                            height: width
+                            radius: width / 2
+                            border.width: Theme.dp(1.4)
+                            border.color: "#000000"
+                            color: response === 1 ? "#ceead6" : response === 2 ? "#e8eaed" : "#fad2cf"
+                            Icon {
+                                anchors.centerIn: parent
+                                width: Theme.dp(10)
+                                height: width
+                                name: parent.response === 1 ? "ios-checkmark" : parent.response === 2 ? "ios-help" : "ios-close"
+                                color: parent.response === 1 ? "#0d652d" : parent.response === 2 ? "#3c4043" : "#b31412"
+                            }
+                        }
+                    }
+                    Column {
+                        id: _names
+                        x: Theme.dp(6) + Theme.dp(26) + Theme.dp(12)
+                        width: parent.width - x - Theme.dp(6)
+                        Label {
+                            objectName: "guestName"
+                            width: parent.width
+                            role: "bodyMedium"
+                            color: Theme.color.onSurface
+                            text: guestRow.modelData.name
+                            maximumLineCount: 2
+                            wrapMode: Text.Wrap
+                            elide: Text.ElideRight
+                            horizontalAlignment: Text.AlignLeft
+                        }
+                        Label {
+                            objectName: "guestOrganizer"
+                            visible: guestRow.modelData.organizer
+                            width: parent.width
+                            role: "labelSmall"
+                            color: Theme.color.onSurfaceVariant
+                            text: _texts.organizer
+                            horizontalAlignment: Text.AlignLeft
+                        }
+                    }
+                }
+            }
+            Item { width: 1; height: Theme.dp(8) }
         }
     }
     Component {
@@ -370,16 +564,32 @@ Item {
     Component {
         id: deleteRow
         Item {
-            height: _delete.height + Theme.dp(4)
-            Button {
-                id: _delete
-                objectName: "deleteButton"
+            height: _deleteColumn.height + Theme.dp(4)
+            Column {
+                id: _deleteColumn
                 y: Theme.dp(4)
                 width: parent.width
-                variant: "tonal"
-                iconName: "ios-trash-outline"
-                text: _texts.deleteEvent
-                onClicked: _confirm.open()
+                spacing: Theme.dp(4)
+                Button {
+                    id: _delete
+                    objectName: "deleteButton"
+                    width: parent.width
+                    variant: "tonal"
+                    enabled: page.deleteState !== "busy"
+                    iconName: "ios-trash-outline"
+                    text: _texts.deleteEvent
+                    onClicked: _confirm.open()
+                }
+                Label {
+                    objectName: "deleteError"
+                    visible: page.deleteState === "failed"
+                    width: parent.width
+                    role: "bodyMedium"
+                    color: Theme.color.error
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.Wrap
+                    text: _texts.deleteFailed
+                }
             }
         }
     }

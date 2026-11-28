@@ -74,6 +74,45 @@ QtObject {
     readonly property string openFailed: qsTrId("id-open-on-phone-failed")
     //% "View more on phone"
     readonly property string viewMoreOnPhone: qsTrId("id-view-more-on-phone")
+    //% "Event could not be deleted."
+    readonly property string deleteFailed: qsTrId("id-delete-event-failed")
+    //% "Organizer"
+    readonly property string organizer: qsTrId("id-guest-organizer")
+    //% "Guests hidden by the organizer"
+    readonly property string guestsHidden: qsTrId("id-guests-hidden-organizer")
+    //% "Too many guests to show"
+    readonly property string guestsTooMany: qsTrId("id-guests-hidden-too-many")
+    //% "Everyone else declined"
+    readonly property string everyoneDeclined: qsTrId("id-everyone-declined")
+
+    // the guests segment (plurals guests_segment_number_of_guests*, strings content_description_rsvp_guest_*)
+    function guests(n) {
+        //% "1 guest"
+        if (n === 1) return qsTrId("id-guests-one")
+        //% "%1 guests"
+        return Logic.format(qsTrId("id-guests-other"), [n])
+    }
+    readonly property var guestsFormat: ({
+        guests: guests,
+        //% "%1 yes"
+        yes: function (n) { return Logic.format(qsTrId("id-guests-yes"), [n]) },
+        //% "%1 no"
+        no: function (n) { return Logic.format(qsTrId("id-guests-no"), [n]) },
+        //% "%1 awaiting"
+        awaiting: function (n) { return Logic.format(qsTrId("id-guests-awaiting"), [n]) },
+        //% "%1, %2"
+        both: qsTrId("id-guests-yes-no")
+    })
+    function guestDescription(name, response) {
+        //% "%1 is going"
+        if (response === 1) return Logic.format(qsTrId("id-guest-going"), [name])
+        //% "%1 might go"
+        if (response === 2) return Logic.format(qsTrId("id-guest-maybe"), [name])
+        //% "%1 has declined"
+        if (response === 3) return Logic.format(qsTrId("id-guest-declined"), [name])
+        //% "%1 has not responded"
+        return Logic.format(qsTrId("id-guest-not-responded"), [name])
+    }
 
     // the chip text of an answer (1 Yes, 2 Maybe, 3 No)
     function rsvpOption(st) {

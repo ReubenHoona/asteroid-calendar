@@ -197,6 +197,35 @@ Item {
             verify(a.event.stats.n >= 1, "the extras come from the stored event")
         }
 
+        // R5 D-16: every other guest declined: the outline and the 16 dp error icon in the event colour before the time
+        function test_cardEveryoneElseDeclined() {
+            var guests = function (x) {
+                var d = { n: 3, c: [1, 0, 2, 0], g: [["Me Example", 1, 3], ["Bo Sample", 3, 0], ["Cy Test", 3, 0]] }
+                if (x)
+                    d.x = 1
+                return "X-EOS-GUESTS:" + encodeURIComponent(JSON.stringify(d)) + "\r\n"
+            }
+            var ics = function (x) {
+                return "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nX-EOS-COLOR:ffd93025\r\nX-EOS-RSVP:1\r\n" + guests(x)
+                       + "END:VEVENT\r\nEND:VCALENDAR\r\n"
+            }
+            var p = agenda([occ("Test Declined By All", 0, 9, 0, 30, { ics: ics(true), location: "Test Room" }),
+                            occ("Test Going", 0, 10, 0, 30, { ics: ics(false) })])
+            var c = cards(p)
+            compare(c.length, 2)
+            compare(c[0].card.container.border.width, 2, "outlined though the user answered")
+            compare(c[0].card.container.border.color.toString(), "#d93025")
+            verify(c[0].declinedIcon.visible)
+            compare(c[0].declinedIcon.width, 32, "16 dp")
+            compare(c[0].declinedIcon.color.toString(), "#d93025", "the event colour")
+            compare(c[0].timeLabel.mapToItem(c[0].card, 0, 0).x, 24 + 32 + 8, "the time 4 dp after the icon")
+            verify(c[0].card.Accessible.name.indexOf("Everyone else declined") > 0)
+            compare(c[1].card.container.border.width, 0)
+            verify(!c[1].declinedIcon.visible)
+            compare(c[1].timeLabel.mapToItem(c[1].card, 0, 0).x, 24)
+            grabImage(p).save("shots/d16-declined.png")
+        }
+
         function test_cardNotebookColour() {
             var card = cards(agenda([occ("Test Own", 0, 9, 0, 30, { color: "#ff9800" })]))[0]
             compare(card.eventColor.toString(), "#ff9800", "no colour from the phone: the notebook's")

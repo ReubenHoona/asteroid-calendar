@@ -79,12 +79,21 @@ Item {
             pages = []
             wait(20)
         }
-        function ics(rsvp, id) {
+        function ics(rsvp, id, guests) {
             var l = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nX-EOS-COLOR:ff3fa9f5\r\nX-EOS-CALENDAR:Test Calendar\r\n"
             if (rsvp !== null)
                 l += "X-EOS-RSVP:" + rsvp + "\r\n"
             if (id !== null)
                 l += "X-EOS-EVENTID:" + id + "\r\n"
+            // R5 D-08: as btsyncd keeps the phone's <gs>: the JSON percent-encoded, folded at 75 octets
+            if (guests) {
+                var v = "X-EOS-GUESTS:" + encodeURIComponent(JSON.stringify(guests))
+                while (v.length > 75) {
+                    l += v.substring(0, 75) + "\r\n "
+                    v = v.substring(75)
+                }
+                l += v + "\r\n"
+            }
             return l + "END:VEVENT\r\nEND:VCALENDAR\r\n"
         }
         // the details of a phone event (X-EOS-RSVP rsvp, X-EOS-EVENTID id; null leaves it out)
@@ -296,13 +305,14 @@ Item {
 
         function test_rowsOfAPhoneEvent() {
             var p = details(0, 456)
-            compare(p.rows.join(), "title,when,calendar,rsvp,openPhone", "the phone's two segments after the calendar's name")
+            compare(p.rows.join(), "title,when,calendar,rsvp,openPhone,delete",
+                    "the phone's two segments after the calendar's name, then Delete event (R5 D-14)")
             compare(one(p, "calendarLabel").text, "Test Calendar")
             compare(Bus.calls.length, 0, "no D-Bus call while the page only shows")
         }
         function test_rowsWithoutResponse() {
             var p = details(null, 456)
-            compare(p.rows.join(), "title,when,calendar,openPhone", "the user is no guest: no RSVP")
+            compare(p.rows.join(), "title,when,calendar,openPhone,delete", "the user is no guest: no RSVP")
             compare(findAll(p, "rsvpSegment").length, 0)
             compare(findAll(p, "openOnPhoneButton").length, 1)
         }
@@ -430,6 +440,174 @@ Item {
         }
 
         // ------------------------------------------------------------------ Open on phone (weather-calendar-38)
+
+        // ------------------------------------------------------------------ R5 D-14: Delete event on the phone
+
+        // the details with a counted pop (the page closes after a delete)
+        property int pops: 0
+        function phoneDetails(props, guests) {
+            pops = 0
+            var ev = createTemporaryObject(eventC, tc, Object.assign({ displayLabel: "Test Event", instanceId: "t1",
+                                                         calendarUid: Logic.phoneNotebookUid,
+                                                         ics: ics(0, 456, guests) }, props || {}))
+            var item = { event: ev, start: tc.start, end: new Date(tc.start.getTime() + 3600000), allDay: false,
+                         dayIndex: 1, dayCount: 1, day: tc.today }
+            var p = detailsC.createObject(host, { item: item, today: tc.today, pop: function () { tc.pops++ } })
+            verify(p !== null)
+            pages = pages.concat([p])
+            p.list.cacheBuffer = 20000
+            wait(300)
+            return p
+        }
+
+        function test_deleteOnThePhone() {
+            var p = phoneDetails()
+            compare(p.rows[p.rows.length - 1], "delete")
+            compare(Bus.calls.length, 0, "nothing asked before Delete")
+            press(p, "deleteButton")
+            tryVerify(function () { return p.deleteDialog.shown }, 2000)
+            compare(p.deleteDialog.title, "Delete this event?")
+            compare(Bus.acts.length, 0, "nothing sent before the answer")
+            p.deleteDialog.confirmed()
+            actsAre(1)
+            compare(Bus.acts[0].json, '{"a":"evdel","id":456,"b":' + Math.floor(tc.start.getTime() / 1000) + '}')
+            compare(p.deleteState, "busy")
+            compare(p.item.event.deleted, 0, "the watch's copy waits for the phone")
+            Bus.answer({ ok: true })
+            tryCompare(p.item.event, "deleted", 1)
+            compare(pops, 1, "the page closes")
+        }
+
+        function test_deleteOnThePhoneFails_data() {
+            return [{ tag: "failed", reply: { ok: false, er: "failed" } }, { tag: "read-only", reply: { ok: false, er: "read-only" } }]
+        }
+        function test_deleteOnThePhoneFails(data) {
+            var p = phoneDetails()
+            p.deleteDialog.open()
+            p.deleteDialog.confirmed()
+            actsAre(1)
+            Bus.answer(data.reply)
+            tryCompare(p, "deleteState", "failed")
+            compare(p.item.event.deleted, 0)
+            compare(pops, 0)
+            var e = one(p, "deleteError")
+            tryCompare(e, "visible", true)
+            compare(e.text, "Event could not be deleted.")
+            compare(one(p, "deleteButton").enabled, true, "can be tried again")
+        }
+
+        function test_deleteWithAnOlderPhoneApp() {
+            // a Gadgetbridge without evdel: the relay says old-app, the stock failure text
+            Bus.actions = Bus.fullActions.filter(function (a) { return a !== "evdel" })
+            var p = phoneDetails()
+            p.deleteDialog.open()
+            p.deleteDialog.confirmed()
+            tryCompare(p, "deleteState", "failed")
+            compare(Bus.acts.length, 0, "not passed to a phone that lacks the act")
+            compare(p.item.event.deleted, 0)
+        }
+
+        function test_deleteAWatchEventStaysLocal() {
+            var p = phoneDetails({ calendarUid: "test-notebook" })
+            p.deleteDialog.open()
+            p.deleteDialog.confirmed()
+            compare(p.item.event.deleted, 1)
+            compare(pops, 1)
+            compare(Bus.acts.length, 0)
+        }
+
+        // ------------------------------------------------------------------ R5 D-15: the location's tap
+
+        function test_locationShowsThePlaceOnThePhone() {
+            var p = phoneDetails({ location: "  1 Example Road,   Exampletown " })
+            compare(p.rows.indexOf("location"), 2)
+            compare(Bus.calls.length, 0)
+            press(p, "locationButton")
+            actsAre(1)
+            compare(Bus.acts[0].json, '{"a":"open","w":"map","q":"1 Example Road, Exampletown"}')
+            compare(p.mapState, "busy")
+            Bus.answer({ ok: true, how: "started" })
+            tryCompare(p, "mapState", "ok")
+            compare(one(p, "mapStatus").visible, true)
+            compare(one(p, "mapStatus").text, "Opened on your phone")
+            press(p, "locationButton")
+            actsAre(2)
+            Bus.answer({ ok: false, er: "no-app" })
+            tryCompare(p, "mapState", "failed")
+            compare(one(p, "mapStatus").text, "Could not open on your phone")
+        }
+
+        // ------------------------------------------------------------------ R5 D-08: the guests segment
+
+        readonly property var someGuests: ({ n: 5, c: [2, 1, 1, 1], g: [["Ada Organizer", 1, 1], ["Cy Test", 1, 0],
+                                            ["Me Example", 2, 2], ["Bo Sample", 3, 0], ["Zoe Example", 0, 0]] })
+
+        function test_guestsSegment() {
+            var p = phoneDetails({ location: "Room 4" }, tc.someGuests)
+            compare(p.rows.join(), "title,when,location,guests,calendar,rsvp,openPhone,delete", "the guests after the location")
+            compare(one(p, "guestsTitle").text, "5 guests")
+            compare(one(p, "guestsDetail").text, "2 yes, 1 no")
+            compare(one(p, "guestsNote").visible, false)
+            compare(one(p, "guestsSummary").iconName, "ios-people-outline")
+            var rows = findAll(p, "guestRow")
+            compare(rows.length, 5)
+            var names = findAll(p, "guestName").map(function (l) { return l.text })
+            compare(names.join("|"), "Ada Organizer|Cy Test|Me Example|Bo Sample|Zoe Example")
+            var tags = findAll(p, "guestOrganizer").filter(function (l) { return l.visible })
+            compare(tags.length, 1)
+            compare(tags[0].text, "Organizer")
+            var badges = findAll(p, "guestBadge")
+            compare(badges.map(function (b) { return b.visible ? b.response : 0 }).join(), "1,1,2,3,0")
+            compare(badges[0].color.toString(), "#ceead6")
+            compare(badges[2].color.toString(), "#e8eaed")
+            compare(badges[3].color.toString(), "#fad2cf")
+            compare(rows[0].Accessible.name, "Ada Organizer is going")
+            compare(rows[2].Accessible.name, "Me Example might go")
+            compare(rows[3].Accessible.name, "Bo Sample has declined")
+            compare(rows[4].Accessible.name, "Zoe Example has not responded")
+            p.list.contentY = 0
+            wait(200)
+            var y = one(p, "guestsSummary").mapToItem(p.list.contentItem, 0, 0).y
+            p.list.contentY = Math.max(0, y - 60)
+            wait(300)
+            grabImage(screen).save("shots/d08-guests.png")
+        }
+
+        function test_guestsSummaryTexts() {
+            var f = { guests: function (n) { return n + " guests" }, yes: function (n) { return n + " yes" },
+                      no: function (n) { return n + " no" }, awaiting: function (n) { return n + " awaiting" }, both: "%1, %2" }
+            var s = function (c) { return Logic.guestsSummary({ count: 9, yes: c[0], maybe: c[1], no: c[2], awaiting: c[3] }, f).detail }
+            compare(s([0, 1, 0, 4]), "4 awaiting", "nobody said yes or no")
+            compare(s([3, 0, 0, 1]), "3 yes")
+            compare(s([0, 0, 2, 1]), "2 no")
+            compare(s([3, 1, 2, 1]), "3 yes, 2 no")
+            var p = phoneDetails({}, { n: 1, c: [0, 0, 0, 1], h: "o", g: [["Ada Organizer", 0, 1]] })
+            compare(one(p, "guestsTitle").text, "1 guest")
+            compare(one(p, "guestsDetail").text, "1 awaiting")
+            compare(one(p, "guestsNote").text, "Guests hidden by the organizer")
+            p = phoneDetails({}, { n: 60, c: [30, 10, 10, 10], h: "t", g: [["Ada Organizer", 1, 1]] })
+            compare(one(p, "guestsNote").text, "Too many guests to show")
+            compare(findAll(p, "guestRow").length, 1)
+        }
+
+        function test_guestsParsing() {
+            var g = Logic.parseExtras(ics(0, 456, tc.someGuests)).guests
+            compare(g.count, 5)
+            compare(g.list.length, 5)
+            verify(g.list[0].organizer && !g.list[0].self)
+            verify(g.list[2].self)
+            compare(g.everyoneElseDeclined, false)
+            // what is not the phone's JSON: no guests, no segment
+            compare(Logic.parseGuests("%7Bnot json"), null)
+            compare(Logic.parseGuests(encodeURIComponent('{"n":0,"c":[0,0,0,0],"g":[]}')), null)
+            compare(Logic.parseGuests(encodeURIComponent('{"n":2,"c":[1,1],"g":[]}')), null)
+            var odd = Logic.parseGuests(encodeURIComponent('{"n":2,"c":[1,0,0,1],"g":[["",1,0],[5,1,0],["Ana",9,"x"]]}'))
+            compare(odd.list.length, 1)
+            compare(odd.list[0].response, 0, "an unknown response is 'not answered'")
+            verify(!odd.list[0].organizer)
+            compare(Logic.parseExtras(ics(0, 456)).guests, null)
+            compare(phoneDetails().rows.indexOf("guests"), -1)
+        }
 
         function test_openOnPhone() {
             var p = details(0, 456)
